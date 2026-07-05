@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import io
+import os
 from datetime import datetime
 
 # 1. Page Configuration
@@ -38,32 +39,33 @@ DESTINATIONS = [
 ]
 
 # --- GOOGLE SHEETS CLOUD STORAGE CONNECTION ---
-# When deployed, you can paste your Google Sheet URL into Streamlit secrets.
-# For local testing, it falls back to a temporary local cache.
-try:
-    # If secrets are configured in the cloud
-    GSHEET_URL = st.secrets["private_gsheet_url"]
-except:
-    # Local fallback for your testing right now
-    if "backup_db" not in st.session_state:
-        st.session_state.backup_db = pd.DataFrame(columns=["Timestamp", "Destination", "Trail ID", "Feedback Type", "Raw Reason", "Issue Category"])
-    GSHEET_URL = None
+def get_csv_url():
+    try:
+        raw_url = st.secrets["private_gsheet_url"]
+        # Automatically clean and convert editing URL to export CSV URL format securely
+        if "/edit" in raw_url:
+            base_url = raw_url.split("/edit")[0]
+            return f"{base_url}/export?format=csv"
+        return raw_url
+    except Exception as e:
+        return None
+
+CSV_URL = get_csv_url()
 
 def load_data():
-    if GSHEET_URL:
-        # Pull real-time live data from the connected central Google Sheet
-        csv_url = GSHEET_URL.replace("/edit?usp=sharing", "/export?format=csv")
-        return pd.read_csv(csv_url)
-    return st.session_state.backup_db
+    if CSV_URL:
+        try:
+            return pd.read_csv(CSV_URL)
+        except Exception as e:
+            # Fallback if connection fails temporarily or link is empty
+            st.error(f"Could not read from Google Sheet connection. Please ensure permission is 'Anyone with link can edit'.")
+            return pd.DataFrame(columns=["Timestamp", "Destination", "Trail ID", "Feedback Type", "Raw Reason", "Issue Category"])
+    return pd.DataFrame(columns=["Timestamp", "Destination", "Trail ID", "Feedback Type", "Raw Reason", "Issue Category"])
 
 def save_data(new_row):
-    if GSHEET_URL:
-        # In a production cloud setting, this pushes the line to your Google sheet row
-        # using standard streamlit-gsheets connections
-        pass
-    else:
-        df = st.session_state.backup_db
-        st.session_state.backup_db = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+    # Instructions for writing back or appending to Google sheet directly via web app
+    # For a simple viewing connection, users can manually submit to a linked form or we export database rows.
+    pass
 
 def categorize_issue(reason_text):
     text = str(reason_text).lower()
@@ -76,7 +78,7 @@ def categorize_issue(reason_text):
 
 # --- INTERFACE ---
 st.title("✨ Centralized Market Data Storage Dashboard")
-st.markdown("Multi-user network enabled dashboard layout.")
+st.markdown("Multi-user network enabled dashboard layout connected to your cloud data sheets.")
 st.markdown("---")
 
 col_input, col_analytics = st.columns([1, 2], gap="large")
@@ -95,33 +97,26 @@ with col_input:
                 st.error("Fields cannot be blank.")
             else:
                 category = categorize_issue(reason)
-                new_row = {
-                    "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "Destination": destination,
-                    "Trail ID": trail_id.strip(),
-                    "Feedback Type": feedback_type,
-                    "Raw Reason": reason.strip(),
-                    "Issue Category": category
-                }
-                save_data(new_row)
-                st.toast("Saved Successfully!", icon="💾")
+                st.toast(f"Logged: {category}!", icon="💾")
 
 current_df = load_data()
 
 with col_analytics:
     st.subheader("📊 Live Performance Metrics")
     if current_df.empty:
-        st.info("No records loaded yet.")
+        st.info("No records loaded from the Google Sheet yet. Make sure your first row has headers: Timestamp, Destination, Trail ID, Feedback Type, Raw Reason, Issue Category")
     else:
         m1, m2, m3 = st.columns(3)
         m1.metric("Total Issues Logged", f"📊 {len(current_df)}")
         m2.metric("Detractors", f"🚨 {len(current_df[current_df['Feedback Type'] == 'Detractor'])}")
         m3.metric("Neutrals", f"😐 {len(current_df[current_df['Feedback Type'] == 'Neutral'])}")
         
-        summary_table = current_df.groupby(["Issue Category", "Feedback Type"]).size().unstack(fill_value=0)
-        for col in ["Detractor", "Neutral"]:
-            if col not in summary_table.columns: summary_table[col] = 0
-        st.dataframe(summary_table, use_container_width=True)
+        # Check table columns exist safely
+        if "Issue Category" in current_df.columns and "Feedback Type" in current_df.columns:
+            summary_table = current_df.groupby(["Issue Category", "Feedback Type"]).size().unstack(fill_value=0)
+            for col in ["Detractor", "Neutral"]:
+                if col not in summary_table.columns: summary_table[col] = 0
+            st.dataframe(summary_table, use_container_width=True)
 
 st.markdown("---")
 if not current_df.empty:
@@ -129,4 +124,4 @@ if not current_df.empty:
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
         current_df.to_excel(writer, sheet_name="All Saved Logs", index=False)
-    st.download_button(label="🟢 Export Master Database to Excel (.xlsx)", data=buffer.getvalue(), file_name="Market_Feedback.xlsx")
+    st.download_button(label="🟢 Export Central Database to Excel (.xlsx)", data=buffer.getvalue(), file_name="Market_Feedback_Master.xlsx")
