@@ -53,14 +53,18 @@ def get_csv_url():
 CSV_URL = get_csv_url()
 
 def load_data():
-    if CSV_URL:
-        try:
-            return pd.read_csv(CSV_URL)
-        except Exception as e:
-            # Fallback if connection fails temporarily or link is empty
-            st.error(f"Could not read from Google Sheet connection. Please ensure permission is 'Anyone with link can edit'.")
-            return pd.DataFrame(columns=["Timestamp", "Destination", "Trail ID", "Feedback Type", "Raw Reason", "Issue Category"])
-    return pd.DataFrame(columns=["Timestamp", "Destination", "Trail ID", "Feedback Type", "Raw Reason", "Issue Category"])
+    try:
+        url = st.secrets["private_gsheet_url"]
+        if "/edit" in url:
+            url = url.split("/edit")[0] + "/export?format=csv"
+        
+        # This tiny change forces Google to bypass its cache and look at your real sheet instantly
+        import time
+        cache_bypass_url = f"{url}&t={int(time.time())}"
+        
+        return pd.read_csv(cache_bypass_url)
+    except Exception as e:
+        return pd.DataFrame(columns=["Timestamp", "Destination", "Trail ID", "Feedback Type", "Raw Reason", "Issue Category"])
 
 def save_data(new_row):
     # Instructions for writing back or appending to Google sheet directly via web app
